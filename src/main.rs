@@ -13,9 +13,10 @@ use tokio::time;
 use std::error::Error;
 use std::time::Duration;
 use std::sync::Arc;
+use std::collections::HashMap;
 
 use warp::Filter;
-use colors_transform::{Rgb, Color};
+use colors_transform::{Rgb, Hsl, Color};
 
 fn construct_message(id: u8, data: Vec<u8>) -> Vec<u8> {
     let xor: u8 = data.iter().fold(id, |a, b| a ^ b);
@@ -106,21 +107,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let light = light.clone();
         let light_characteristic = light_characteristic.clone();
 
-        let path = warp::path!("light" / String).then(move |hex: String| {
-            let light = light.clone();
-            let light_characteristic = light_characteristic.clone();
+        let path = warp::path!("light")
+            .and(warp::query::<HashMap<String, String>>())
+            .then(move |map: HashMap<String, String>| {
+                let light = light.clone();
+                let light_characteristic = light_characteristic.clone();
 
-            async move {
-                let color = Rgb::from_hex_str(&hex).unwrap();
-                println!("Changing color to {:?}", color);
+                async move {
+                    let mut color: Rgb = Rgb::from_tuple(&(0.0,0.0,0.0));
+                    if map.contains_key("hex") {
+                        println!("Changing color to HEX {:?}", &map["hex"]);
+                        color = Rgb::from_hex_str(&map["hex"]).unwrap();
+                    } else if map.contains_key("hue") && map.contains_key("sat") {
+                        let hue: f32 = map["hue"].parse::<f32>().unwrap_or(0.0);
+                        let sat: f32 = map["sat"].parse::<f32>().unwrap_or(0.0);
+                        let lum: f32 = if map.contains_key("lum") { map["lum"].parse::<f32>().unwrap_or(0.0) } else { 100.0 };
+                        let lum = (lum/255.0) * 100.0 * 0.4;
 
-                send_message(&light, light_characteristic.as_ref().unwrap(),
-                            light_message(color.get_red() as u8, color.get_green() as u8, color.get_blue() as u8)
-                ).await;
+                        println!("Changing color to HUE {:?}, SAT {:?}", &map["hue"], &map["sat"]);
+                        color = Hsl::from_tuple(&(hue, sat, lum)).to_rgb();
+                    }
 
-                Ok("Color set")
-            }
-        });
+                    send_message(&light, light_characteristic.as_ref().unwrap(),
+                                light_message(color.get_red() as u8, color.get_green() as u8, color.get_blue() as u8)
+                    ).await;
+
+                    Ok("Color set")
+                }
+            });
         warp::serve(path).run(([127, 0, 0, 1], 3030)).await;
     }
 
